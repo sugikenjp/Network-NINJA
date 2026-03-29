@@ -1,0 +1,24 @@
+services:
+  ninja-manager:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ninja-manager:latest
+    container_name: ninja-manager
+    restart: unless-stopped
+
+    ports:
+      - "8080:8080"       # Web UI & REST API
+      - "514:514/udp"     # Syslog receiver
+      # If you cannot bind :514, change to "5514:514/udp" and set SYSLOG_PORT=5514
+
+    volumes:
+      - ninja-data:/data  # SQLite DB persistence
+
+    environment:
+      WEB_PORT: "8080"
+      SYSLOG_PORT: "514"
+      DB_PATH: "/data/ninja.db"
+
+volumes:
+  ninja-data:
