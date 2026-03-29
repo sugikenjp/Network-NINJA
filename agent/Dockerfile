@@ -5,7 +5,7 @@ FROM alpine:3.21
 # wget: Manager への HTTP 通信（curl より軽量）
 RUN apk add --no-cache tcpdump util-linux wget
 
-COPY agent.sh /usr/local/bin/nn-agent.sh
+COPY nn-agent.sh /usr/local/bin/nn-agent.sh
 RUN chmod +x /usr/local/bin/nn-agent.sh
 
 # 必須環境変数
