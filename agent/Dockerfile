@@ -5,8 +5,8 @@ FROM alpine:3.21
 # wget: Manager への HTTP 通信（curl より軽量）
 RUN apk add --no-cache tcpdump util-linux wget
 
-COPY agent.sh /usr/local/bin/agent.sh
-RUN chmod +x /usr/local/bin/agent.sh
+COPY agent.sh /usr/local/bin/nn-agent.sh
+RUN chmod +x /usr/local/bin/nn-agent.sh
 
 # 必須環境変数
 # MANAGER_URL  : http://<manager-ip>:8080
@@ -15,4 +15,4 @@ RUN chmod +x /usr/local/bin/agent.sh
 # NODE_ID      : ノード識別子 (default: hostname)
 # NODE_LABEL   : 表示名 (default: NODE_ID)
 
-ENTRYPOINT ["/usr/local/bin/agent.sh"]
+ENTRYPOINT ["/usr/local/bin/nn-agent.sh"]
