@@ -1,6 +1,6 @@
 # Network-NINJA
 
-- Netwok-NINJAはネットワーク内に設置したセンターにより、特定の通信（主に不正な通信）を検知するシステムです
+- Network-NINJA はネットワーク内に設置したセンターにより、特定の通信（主に不正な通信）を検知するシステムです
 - ネットワーク機器の余剰リソースでの実現を目指しています
 - 検知にあたっては、ネットワークの設計から組み込む必要があります（セキュリティバイデザイン）
 
@@ -8,8 +8,8 @@
 [ネットワーク機器A]          [ネットワーク機器B]
  └─ ninja-agent               └─ ninja-agent
       │ Heartbeat (30s)             │ Heartbeat (30s)
-      │ Config poll (60s)           │ Config poll (60s)
-      │ ICMP → syslog UDP           │ ICMP → syslog UDP
+      │ Filter poll (60s)           │ Filter poll (60s)
+      │ Captured traffic → syslog UDP │ Captured traffic → syslog UDP
       └──────────────┬──────────────┘
                      ▼
              [Manager サーバ]
@@ -24,15 +24,14 @@
 ## ディレクトリ構成
 
 ```
-ninja-manager/
+Network-NINJA/
 ├── manager/
-│   ├── app.py              # Flask アプリ本体
+│   ├── NN-Manager.py       # Flask アプリ本体
 │   ├── Dockerfile
-│   └── docker-compose.yml
+│   └── Docker-compose
 └── agent/
-    ├── agent.sh            # Agent エントリポイント
-    ├── Dockerfile
-    └── docker-compose.yml
+    ├── nn-agent.sh         # Agent エントリポイント
+    └── Dockerfile
 ```
 
 ---
@@ -52,10 +51,10 @@ Web UI: http://<manager-ip>:8080
 
 ```bash
 pip install flask
-DB_PATH=./ninja.db WEB_PORT=8080 SYSLOG_PORT=5514 python3 app.py
+DB_PATH=./ninja.db WEB_PORT=8080 SYSLOG_PORT=5514 python3 NN-Manager.py
 ```
 
-> ポート514はroot権限が必要です。非rootの場合は `SYSLOG_PORT=5514` を使用してください。
+> ポート 514 は root 権限が必要です。非 root の場合は `SYSLOG_PORT=5514` を使用してください。
 
 ---
 
@@ -95,7 +94,7 @@ docker run -d \
 | 変数 | 必須 | 説明 | 例 |
 |------|------|------|----|
 | MANAGER_URL   | ✓ | Manager の URL | `http://192.168.1.100:8080` |
-| SYSLOG_SERVER | ✓ | syslog 送信先 IP | `192.168.1.100` |
+| SYSLOG_SERVER | ✓ | syslog 送信先 IP（通常は Manager と同じ） | `192.168.1.100` |
 | SYSLOG_PORT   |   | syslog 送信先ポート（省略時 514） | `514` |
 | NODE_ID       |   | ノード識別子（省略時: hostname） | `agent-sw01` |
 | NODE_LABEL    |   | Manager UI の表示名 | `Switch-01 (1F)` |
@@ -115,6 +114,24 @@ docker rm ninja-agent
 
 ---
 
+## キャプチャフィルタの設定
+
+Manager の Web UI **[ FILTER CONFIG ]** タブから、Agent がキャプチャするトラフィックを選択できます。
+
+| プロトコル | 説明 |
+|------------|------|
+| ICMP | Ping（Echo Request / Echo Reply） |
+| 80/tcp | HTTP |
+| 443/tcp | HTTPS |
+| 445/tcp | SMB |
+
+選択後に **「Apply to All Agents」** を押すと設定が保存されます。  
+各 Agent は 60 秒以内に設定を取得し、tcpdump フィルタを自動更新・再起動します。
+
+何も選択しない場合は ICMP のみキャプチャします（デフォルト動作）。
+
+---
+
 ## REST API リファレンス
 
 | Method | Path | 説明 |
@@ -122,31 +139,32 @@ docker rm ninja-agent
 | POST   | /api/heartbeat | Agent からの死活報告 |
 | GET    | /api/nodes | ノード一覧取得 |
 | DELETE | /api/nodes/:id | ノード削除 |
-| GET    | /api/syslogs | syslogログ取得（?q=検索&source=IP&limit=件数） |
+| GET    | /api/syslogs | syslog ログ取得（?q=検索&source=IP&limit=件数） |
 | GET    | /api/syslogs/count | ログ総件数 |
-| POST   | /api/config/deploy | 設定一括配布 |
-| GET    | /api/config/:node_id | Agent が設定をポーリング |
+| GET    | /api/filter | 現在のキャプチャフィルタ設定を取得 |
+| POST   | /api/filter | キャプチャフィルタ設定を更新 |
+| GET    | /api/config/:node_id | Agent がフィルタ設定をポーリング |
 
-### 設定一括配布の例
+### フィルタ設定の例
 
 ```bash
-curl -X POST http://manager:8080/api/config/deploy \
+# 現在の設定を確認
+curl http://manager:8080/api/filter
+
+# ICMP + HTTPS を有効にする
+curl -X POST http://manager:8080/api/filter \
   -H "Content-Type: application/json" \
-  -d '{
-    "node_ids": ["agent-sw01", "agent-sw02"],
-    "syslog_ip": "192.168.1.200",
-    "syslog_port": 514
-  }'
+  -d '{"icmp": true, "tcp80": false, "tcp443": true, "tcp445": false}'
 ```
 
 ---
 
-## 設定変更の仕組み
+## フィルタ変更の仕組み
 
-1. Manager の Web UI で新しい Syslog IP/Port を入力し「Deploy」
-2. Manager DB に新設定が保存される
+1. Manager の Web UI で対象プロトコルを選択し「Apply to All Agents」
+2. Manager DB（`settings` テーブル）にフィルタ設定が保存される
 3. 各 Agent は 60 秒ごとに `GET /api/config/<node_id>` をポーリング
-4. 変更を検知したら `icmp-watcher` を新設定で再起動
+4. 変更を検知したら tcpdump を新しい BPF フィルタで再起動
 
 ---
 
@@ -154,8 +172,8 @@ curl -X POST http://manager:8080/api/config/deploy \
 
 | 状態 | 条件 |
 |------|------|
-| ONLINE  | 最終ハートビートから2分以内 |
-| OFFLINE | 最終ハートビートから2分超過 |
+| ONLINE  | 最終ハートビートから 2 分以内 |
+| OFFLINE | 最終ハートビートから 2 分超過 |
 
 ---
 
@@ -163,6 +181,6 @@ curl -X POST http://manager:8080/api/config/deploy \
 
 SQLite（`/data/ninja.db`）に以下を保存します。
 
-- `nodes` テーブル: ノード情報・最終確認時刻・設定
+- `nodes` テーブル: ノード情報・最終確認時刻
 - `syslogs` テーブル: 受信ログ全件
-- `config_templates` テーブル: 配布履歴
+- `settings` テーブル: キャプチャフィルタ設定
