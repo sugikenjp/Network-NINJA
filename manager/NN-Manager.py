@@ -5,6 +5,7 @@ Web UI + REST API + Syslog receiver
 """
 
 import os
+import re
 import json
 import sqlite3
 import threading
@@ -50,6 +51,12 @@ def init_db():
                 'filters',
                 '{"icmp":true,"tcp80":false,"tcp443":false,"tcp445":false}'
             );
+            CREATE TABLE IF NOT EXISTS source_ips (
+                ip         TEXT PRIMARY KEY,
+                first_seen TEXT,
+                last_seen  TEXT,
+                count      INTEGER DEFAULT 1
+            );
         """)
 
 # ---------------------------------------------------------------------------
@@ -73,6 +80,18 @@ class SyslogHandler(socketserver.BaseRequestHandler):
                    ON CONFLICT(id) DO UPDATE SET last_seen=excluded.last_seen, status='online'""",
                 (source_ip, source_ip, source_ip, received_at, "online")
             )
+            # syslog メッセージ中の "from <IP>" を抽出して source_ips に記録
+            m = re.search(r'from\s+(\d{1,3}(?:\.\d{1,3}){3})', msg)
+            if m:
+                observed_ip = m.group(1)
+                conn.execute(
+                    """INSERT INTO source_ips (ip, first_seen, last_seen, count)
+                       VALUES (?, ?, ?, 1)
+                       ON CONFLICT(ip) DO UPDATE SET
+                         last_seen = excluded.last_seen,
+                         count     = count + 1""",
+                    (observed_ip, received_at, received_at)
+                )
 
 def start_syslog_server():
     port = int(os.environ.get("SYSLOG_PORT", 514))
@@ -184,6 +203,25 @@ def syslog_count():
     with get_db() as conn:
         total = conn.execute("SELECT COUNT(*) FROM syslogs").fetchone()[0]
     return jsonify({"total": total})
+
+@app.route("/api/source_ips", methods=["GET"])
+def list_source_ips():
+    """syslog から抽出した送信元 IP 一覧を返す（JSON）。"""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM source_ips ORDER BY last_seen DESC"
+        ).fetchall()
+    return jsonify([dict(r) for r in rows])
+
+@app.route("/ipaddress", methods=["GET"])
+def ipaddress_text():
+    """送信元 IP 一覧をプレーンテキスト（1 行 1 IP）で返す。"""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT ip FROM source_ips ORDER BY last_seen DESC"
+        ).fetchall()
+    body = "\n".join(r["ip"] for r in rows)
+    return body, 200, {"Content-Type": "text/plain; charset=utf-8"}
 
 # ---------------------------------------------------------------------------
 # Web UI (single-page, served from Flask)
@@ -323,6 +361,7 @@ HTML = r"""<!DOCTYPE html>
 <nav>
   <button class="active" onclick="showPage('nodes',this)">[ NODES ]</button>
   <button onclick="showPage('logs',this)">[ SYSLOG ]</button>
+  <button onclick="showPage('ips',this)">[ SOURCE IPs ]</button>
   <button onclick="showPage('filter',this)">[ FILTER CONFIG ]</button>
 </nav>
 
@@ -363,6 +402,32 @@ HTML = r"""<!DOCTYPE html>
       <button class="btn btn-blue"  onclick="toggleAutoRefresh()">AUTO</button>
     </div>
     <div class="log-stream" id="log-stream"></div>
+  </div>
+</div>
+
+<!-- SOURCE IPs PAGE -->
+<div class="page" id="page-ips">
+  <div class="card">
+    <div class="card-title">Observed Source IP Addresses</div>
+    <div class="form-row" style="margin-bottom:12px">
+      <button class="btn btn-ghost" onclick="fetchSourceIPs()">↻ Refresh</button>
+      <span style="color:var(--muted);font-size:11px;margin-left:6px">
+        syslog メッセージ中の <span style="color:var(--blue)">"from &lt;IP&gt;"</span> を自動抽出して記録 &nbsp;|&nbsp;
+        テキスト形式:
+        <a href="/ipaddress" target="_blank" style="color:var(--blue);text-decoration:none">
+          /ipaddress
+        </a>
+      </span>
+    </div>
+    <table>
+      <thead><tr>
+        <th>Source IP</th>
+        <th>First Seen (UTC)</th>
+        <th>Last Seen (UTC)</th>
+        <th>Count</th>
+      </tr></thead>
+      <tbody id="ips-table"></tbody>
+    </table>
   </div>
 </div>
 
@@ -425,6 +490,7 @@ function showPage(name, btn) {
   document.getElementById('page-' + name).classList.add('active');
   if (btn) btn.classList.add('active');
   if (name === 'logs')   fetchLogs();
+  if (name === 'ips')    fetchSourceIPs();
   if (name === 'filter') fetchFilter();
 }
 
@@ -520,6 +586,30 @@ function toggleAutoRefresh() {
     clearInterval(arTimer);
     toast('Auto-refresh OFF');
   }
+}
+
+// ── Source IPs ──────────────────────────────────────────
+async function fetchSourceIPs() {
+  const res   = await fetch('/api/source_ips');
+  const ips   = await res.json();
+  const tbody = document.getElementById('ips-table');
+  tbody.innerHTML = '';
+  if (!ips.length) {
+    tbody.innerHTML = '<tr><td colspan="4" style="color:var(--muted);text-align:center">No data yet</td></tr>';
+    return;
+  }
+  ips.forEach(r => {
+    const tr    = document.createElement('tr');
+    const first = (r.first_seen || '').replace('T',' ').slice(0,19);
+    const last  = (r.last_seen  || '').replace('T',' ').slice(0,19);
+    tr.innerHTML = `
+      <td style="color:var(--blue);font-family:monospace">${r.ip}</td>
+      <td style="color:var(--muted)">${first || '-'}</td>
+      <td style="color:var(--muted)">${last  || '-'}</td>
+      <td>${r.count}</td>
+    `;
+    tbody.appendChild(tr);
+  });
 }
 
 // ── Filter Config ──────────────────────────────────────
