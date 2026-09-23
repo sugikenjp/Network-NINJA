@@ -26,7 +26,7 @@ def get_db():
     return conn
 
 def init_db():
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
     with get_db() as conn:
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS nodes (
@@ -34,8 +34,6 @@ def init_db():
                 label       TEXT,
                 ip          TEXT,
                 last_seen   TEXT,
-                syslog_ip   TEXT,
-                syslog_port INTEGER,
                 status      TEXT DEFAULT 'unknown'
             );
             CREATE TABLE IF NOT EXISTS syslogs (
@@ -44,12 +42,13 @@ def init_db():
                 source_ip   TEXT,
                 message     TEXT
             );
-            CREATE TABLE IF NOT EXISTS config_templates (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                name        TEXT,
-                syslog_ip   TEXT,
-                syslog_port INTEGER,
-                created_at  TEXT
+            CREATE TABLE IF NOT EXISTS settings (
+                key   TEXT PRIMARY KEY,
+                value TEXT
+            );
+            INSERT OR IGNORE INTO settings (key, value) VALUES (
+                'filters',
+                '{"icmp":true,"tcp80":false,"tcp443":false,"tcp445":false}'
             );
         """)
 
@@ -68,12 +67,11 @@ class SyslogHandler(socketserver.BaseRequestHandler):
                 "INSERT INTO syslogs (received_at, source_ip, message) VALUES (?,?,?)",
                 (received_at, source_ip, msg)
             )
-            # auto-register node if unknown
             conn.execute(
-                """INSERT INTO nodes (id, label, ip, last_seen, syslog_ip, syslog_port, status)
-                   VALUES (?,?,?,?,?,?,?)
+                """INSERT INTO nodes (id, label, ip, last_seen, status)
+                   VALUES (?,?,?,?,?)
                    ON CONFLICT(id) DO UPDATE SET last_seen=excluded.last_seen, status='online'""",
-                (source_ip, source_ip, source_ip, received_at, "", 514, "online")
+                (source_ip, source_ip, source_ip, received_at, "online")
             )
 
 def start_syslog_server():
@@ -94,21 +92,20 @@ def start_syslog_server():
 def heartbeat():
     """Agent calls this every 30s to report liveness."""
     data = request.get_json(silent=True) or {}
-    node_id   = data.get("node_id") or request.remote_addr
-    label     = data.get("label", node_id)
-    ip        = data.get("ip", request.remote_addr)
-    now       = datetime.utcnow().isoformat()
+    node_id = data.get("node_id") or request.remote_addr
+    label   = data.get("label", node_id)
+    ip      = data.get("ip", request.remote_addr)
+    now     = datetime.utcnow().isoformat()
     with get_db() as conn:
         conn.execute(
-            """INSERT INTO nodes (id, label, ip, last_seen, syslog_ip, syslog_port, status)
-               VALUES (?,?,?,?,?,?,?)
+            """INSERT INTO nodes (id, label, ip, last_seen, status)
+               VALUES (?,?,?,?,?)
                ON CONFLICT(id) DO UPDATE SET
                  label=excluded.label,
                  ip=excluded.ip,
                  last_seen=excluded.last_seen,
                  status='online'""",
-            (node_id, label, ip, now,
-             data.get("syslog_ip",""), data.get("syslog_port", 514), "online")
+            (node_id, label, ip, now, "online")
         )
     return jsonify({"status": "ok"})
 
@@ -128,36 +125,40 @@ def delete_node(node_id):
         conn.execute("DELETE FROM nodes WHERE id=?", (node_id,))
     return jsonify({"status": "deleted"})
 
-@app.route("/api/config/deploy", methods=["POST"])
-def deploy_config():
-    """Push new syslog target to selected nodes (nodes must poll /api/config/<node_id>)."""
-    data = request.get_json(silent=True) or {}
-    node_ids    = data.get("node_ids", [])
-    syslog_ip   = data.get("syslog_ip", "")
-    syslog_port = int(data.get("syslog_port", 514))
-    now         = datetime.utcnow().isoformat()
+@app.route("/api/filter", methods=["GET"])
+def get_filter():
+    """Return the current capture filter configuration."""
     with get_db() as conn:
-        for nid in node_ids:
-            conn.execute(
-                "UPDATE nodes SET syslog_ip=?, syslog_port=?, last_seen=last_seen WHERE id=?",
-                (syslog_ip, syslog_port, nid)
-            )
+        row = conn.execute("SELECT value FROM settings WHERE key='filters'").fetchone()
+    if row:
+        return jsonify(json.loads(row["value"]))
+    return jsonify({"icmp": True, "tcp80": False, "tcp443": False, "tcp445": False})
+
+@app.route("/api/filter", methods=["POST"])
+def set_filter():
+    """Update the capture filter configuration."""
+    data = request.get_json(silent=True) or {}
+    filters = {
+        "icmp":   bool(data.get("icmp",   True)),
+        "tcp80":  bool(data.get("tcp80",  False)),
+        "tcp443": bool(data.get("tcp443", False)),
+        "tcp445": bool(data.get("tcp445", False)),
+    }
+    with get_db() as conn:
         conn.execute(
-            "INSERT INTO config_templates (name, syslog_ip, syslog_port, created_at) VALUES (?,?,?,?)",
-            (f"deploy-{now[:19]}", syslog_ip, syslog_port, now)
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('filters', ?)",
+            (json.dumps(filters),)
         )
-    return jsonify({"status": "queued", "targets": node_ids})
+    return jsonify({"status": "ok"})
 
 @app.route("/api/config/<node_id>", methods=["GET"])
 def get_config(node_id):
-    """Agent polls this endpoint to receive pending config."""
+    """Agent polls this endpoint to receive current filter config."""
     with get_db() as conn:
-        row = conn.execute(
-            "SELECT syslog_ip, syslog_port FROM nodes WHERE id=?", (node_id,)
-        ).fetchone()
-    if row:
-        return jsonify({"syslog_ip": row["syslog_ip"], "syslog_port": row["syslog_port"]})
-    return jsonify({}), 404
+        row = conn.execute("SELECT value FROM settings WHERE key='filters'").fetchone()
+    filters = json.loads(row["value"]) if row else \
+              {"icmp": True, "tcp80": False, "tcp443": False, "tcp445": False}
+    return jsonify({"filters": filters})
 
 @app.route("/api/syslogs", methods=["GET"])
 def list_syslogs():
@@ -264,8 +265,7 @@ HTML = r"""<!DOCTYPE html>
   input, select { background: var(--bg3); border: 1px solid var(--border); color: var(--text);
                   padding: 6px 10px; border-radius: 4px; font: inherit; font-size: 12px; }
   input:focus, select:focus { outline: none; border-color: var(--blue); }
-  input[type=checkbox] { width: 14px; height: 14px; }
-  label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+  input[type=checkbox] { width: 16px; height: 16px; cursor: pointer; accent-color: var(--blue); }
 
   .btn { border: none; border-radius: 4px; padding: 6px 14px; cursor: pointer;
          font: inherit; font-size: 12px; font-weight: bold; letter-spacing: 1px; transition: opacity .15s; }
@@ -277,6 +277,28 @@ HTML = r"""<!DOCTYPE html>
 
   .tag { display: inline-block; background: var(--bg3); border: 1px solid var(--border);
          border-radius: 3px; padding: 1px 6px; font-size: 10px; }
+
+  /* Filter checkboxes */
+  .filter-row {
+    display: flex; align-items: center; gap: 12px; padding: 10px 14px;
+    border: 1px solid var(--border); border-radius: 4px; cursor: pointer;
+    transition: border-color .15s;
+  }
+  .filter-row:hover { border-color: var(--blue); }
+  .filter-row.active { border-color: var(--blue); background: rgba(88,166,255,.06); }
+  .filter-row .proto-tag {
+    display: inline-block; min-width: 90px; text-align: center;
+    background: var(--bg3); border: 1px solid var(--border);
+    border-radius: 3px; padding: 3px 10px; font-size: 12px; font-weight: bold;
+    color: var(--blue);
+  }
+  .filter-row .proto-desc { color: var(--muted); font-size: 12px; }
+
+  .filter-expr {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 4px;
+    padding: 12px 14px; font-size: 12px; color: var(--blue);
+    font-family: monospace; word-break: break-all; min-height: 40px;
+  }
 
   #toast { position: fixed; bottom: 20px; right: 20px; background: var(--bg2);
            border: 1px solid var(--green); color: var(--green); padding: 10px 18px;
@@ -299,9 +321,9 @@ HTML = r"""<!DOCTYPE html>
 </header>
 
 <nav>
-  <button class="active" onclick="showPage('nodes')">[ NODES ]</button>
-  <button onclick="showPage('logs')">[ SYSLOG ]</button>
-  <button onclick="showPage('deploy')">[ DEPLOY CONFIG ]</button>
+  <button class="active" onclick="showPage('nodes',this)">[ NODES ]</button>
+  <button onclick="showPage('logs',this)">[ SYSLOG ]</button>
+  <button onclick="showPage('filter',this)">[ FILTER CONFIG ]</button>
 </nav>
 
 <main>
@@ -319,7 +341,7 @@ HTML = r"""<!DOCTYPE html>
     <table>
       <thead><tr>
         <th>Status</th><th>Node ID</th><th>Label</th><th>IP</th>
-        <th>Last Seen (UTC)</th><th>Syslog Target</th><th>Action</th>
+        <th>Last Seen (UTC)</th><th>Action</th>
       </tr></thead>
       <tbody id="node-table"></tbody>
     </table>
@@ -344,24 +366,47 @@ HTML = r"""<!DOCTYPE html>
   </div>
 </div>
 
-<!-- DEPLOY PAGE -->
-<div class="page" id="page-deploy">
+<!-- FILTER CONFIG PAGE -->
+<div class="page" id="page-filter">
   <div class="card">
-    <div class="card-title">Deploy Config to Nodes</div>
-    <div class="form-row">
-      <input id="d-syslog-ip"   placeholder="New Syslog Server IP" style="flex:1">
-      <input id="d-syslog-port" placeholder="Port (e.g. 514)" style="width:120px" value="514">
+    <div class="card-title">Capture Filter — applies to all agents</div>
+    <div style="color:var(--muted);font-size:12px;margin-bottom:16px;line-height:1.7">
+      選択したプロトコルを全 Agent の tcpdump フィルタに追加します。<br>
+      変更は Agent が次回ポーリング（60 秒以内）した際に反映されます。
     </div>
-    <div class="card-title" style="margin-top:12px">Select Target Nodes</div>
-    <div id="deploy-node-list" style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px"></div>
-    <button class="btn btn-green" onclick="deployConfig()">▶ Deploy to Selected</button>
+
+    <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:20px">
+      <label class="filter-row" id="row-icmp">
+        <input type="checkbox" id="f-icmp" onchange="onFilterChange('row-icmp','f-icmp')">
+        <span class="proto-tag">ICMP</span>
+        <span class="proto-desc">Ping &nbsp;（Echo Request / Echo Reply）</span>
+      </label>
+      <label class="filter-row" id="row-tcp80">
+        <input type="checkbox" id="f-tcp80" onchange="onFilterChange('row-tcp80','f-tcp80')">
+        <span class="proto-tag">80 / tcp</span>
+        <span class="proto-desc">HTTP</span>
+      </label>
+      <label class="filter-row" id="row-tcp443">
+        <input type="checkbox" id="f-tcp443" onchange="onFilterChange('row-tcp443','f-tcp443')">
+        <span class="proto-tag">443 / tcp</span>
+        <span class="proto-desc">HTTPS</span>
+      </label>
+      <label class="filter-row" id="row-tcp445">
+        <input type="checkbox" id="f-tcp445" onchange="onFilterChange('row-tcp445','f-tcp445')">
+        <span class="proto-tag">445 / tcp</span>
+        <span class="proto-desc">SMB</span>
+      </label>
+    </div>
+
+    <button class="btn btn-blue" onclick="saveFilter()">▶ Apply to All Agents</button>
   </div>
+
   <div class="card">
-    <div class="card-title">How Agents Apply Config</div>
-    <div style="color:var(--muted);font-size:12px;line-height:1.8">
-      Each Agent polls <span style="color:var(--blue)">GET /api/config/&lt;node_id&gt;</span>
-      every 60 seconds.<br>
-      When a new syslog_ip / syslog_port is found, the agent restarts icmp-watcher.sh with the new target.
+    <div class="card-title">Generated tcpdump Filter Expression</div>
+    <div class="filter-expr" id="filter-preview">(none)</div>
+    <div style="color:var(--muted);font-size:11px;margin-top:10px;line-height:1.7">
+      Agent は <span style="color:var(--blue)">GET /api/config/&lt;node_id&gt;</span> を 60 秒ごとにポーリングし、<br>
+      フィルタ変更を検知した場合は tcpdump を新しいフィルタで再起動します。
     </div>
   </div>
 </div>
@@ -374,13 +419,13 @@ HTML = r"""<!DOCTYPE html>
 let autoRefresh = false;
 let arTimer = null;
 
-function showPage(name) {
+function showPage(name, btn) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
   document.getElementById('page-' + name).classList.add('active');
-  event.target.classList.add('active');
-  if (name === 'logs') fetchLogs();
-  if (name === 'deploy') fetchDeployNodes();
+  if (btn) btn.classList.add('active');
+  if (name === 'logs')   fetchLogs();
+  if (name === 'filter') fetchFilter();
 }
 
 function toast(msg, ok=true) {
@@ -410,12 +455,11 @@ async function fetchNodes() {
       <td>${n.label || '-'}</td>
       <td>${n.ip || '-'}</td>
       <td style="color:var(--muted)">${last}</td>
-      <td>${n.syslog_ip ? n.syslog_ip+':'+n.syslog_port : '<span style="color:var(--muted)">-</span>'}</td>
       <td><button class="btn btn-red" style="padding:3px 8px;font-size:11px" onclick="deleteNode('${n.id}')">✕</button></td>
     `;
     tbody.appendChild(tr);
   });
-  document.getElementById('s-total').textContent  = nodes.length;
+  document.getElementById('s-total').textContent   = nodes.length;
   document.getElementById('s-online').textContent  = on;
   document.getElementById('s-offline').textContent = off;
   document.getElementById('hdr-online').textContent = `● ${on} ONLINE`;
@@ -446,7 +490,7 @@ async function fetchLogs() {
   ]);
   const logs = await logsRes.json();
   const {total} = await cntRes.json();
-  document.getElementById('s-logs').textContent  = total;
+  document.getElementById('s-logs').textContent   = total;
   document.getElementById('hdr-logs').textContent = total + ' LOGS';
   const stream = document.getElementById('log-stream');
   stream.innerHTML = '';
@@ -478,35 +522,49 @@ function toggleAutoRefresh() {
   }
 }
 
-// ── Deploy ──────────────────────────────────────────────
-async function fetchDeployNodes() {
-  const res   = await fetch('/api/nodes');
-  const nodes = await res.json();
-  const box   = document.getElementById('deploy-node-list');
-  box.innerHTML = '';
-  nodes.forEach(n => {
-    const id = 'chk-' + n.id.replace(/\./g,'-');
-    const label = document.createElement('label');
-    label.innerHTML = `
-      <input type="checkbox" id="${id}" value="${n.id}" checked>
-      <span class="tag" style="font-size:12px">${n.label || n.id} (${n.ip})</span>`;
-    box.appendChild(label);
-  });
+// ── Filter Config ──────────────────────────────────────
+async function fetchFilter() {
+  const res  = await fetch('/api/filter');
+  const data = await res.json();
+  const map = {icmp: 'f-icmp', tcp80: 'f-tcp80', tcp443: 'f-tcp443', tcp445: 'f-tcp445'};
+  const rows = {icmp: 'row-icmp', tcp80: 'row-tcp80', tcp443: 'row-tcp443', tcp445: 'row-tcp445'};
+  for (const [key, cbId] of Object.entries(map)) {
+    const cb = document.getElementById(cbId);
+    cb.checked = !!data[key];
+    document.getElementById(rows[key]).classList.toggle('active', cb.checked);
+  }
+  updateFilterPreview();
 }
 
-async function deployConfig() {
-  const ip   = document.getElementById('d-syslog-ip').value.trim();
-  const port = parseInt(document.getElementById('d-syslog-port').value) || 514;
-  if (!ip) { toast('Syslog IP required', false); return; }
-  const ids = [...document.querySelectorAll('#deploy-node-list input:checked')].map(c=>c.value);
-  if (!ids.length) { toast('No nodes selected', false); return; }
-  const res = await fetch('/api/config/deploy', {
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({node_ids: ids, syslog_ip: ip, syslog_port: port})
+function onFilterChange(rowId, cbId) {
+  document.getElementById(rowId).classList.toggle('active',
+    document.getElementById(cbId).checked);
+  updateFilterPreview();
+}
+
+function updateFilterPreview() {
+  const parts = [];
+  if (document.getElementById('f-icmp').checked)   parts.push('(icmp[0] = 8 or icmp[0] = 0)');
+  if (document.getElementById('f-tcp80').checked)  parts.push('tcp port 80');
+  if (document.getElementById('f-tcp443').checked) parts.push('tcp port 443');
+  if (document.getElementById('f-tcp445').checked) parts.push('tcp port 445');
+  document.getElementById('filter-preview').textContent =
+    parts.length ? parts.join(' or ') : '(none selected — agents will use default ICMP filter)';
+}
+
+async function saveFilter() {
+  const payload = {
+    icmp:   document.getElementById('f-icmp').checked,
+    tcp80:  document.getElementById('f-tcp80').checked,
+    tcp443: document.getElementById('f-tcp443').checked,
+    tcp445: document.getElementById('f-tcp445').checked,
+  };
+  const res = await fetch('/api/filter', {
+    method:  'POST',
+    headers: {'Content-Type': 'application/json'},
+    body:    JSON.stringify(payload),
   });
-  const data = await res.json();
-  toast(`Queued for ${data.targets.length} node(s)`);
+  toast(res.ok ? 'Filter saved — agents will update within 60 s' : 'Save failed', res.ok);
 }
 
 // ── Clock + polling ──────────────────────────────────────────────
