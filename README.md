@@ -22,7 +22,8 @@ This approach makes security monitoring part of the network design process.
 > Network-NINJA does not replace network design.  
 > It encourages organizations to understand their networks deeply enough to design security into them.
 
-[日本語版はこちら.md
+README_ja.md
+
 
 ---
 
