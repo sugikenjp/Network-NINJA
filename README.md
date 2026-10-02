@@ -1,186 +1,397 @@
 # Network-NINJA
 
-- Network-NINJA はネットワーク内に設置したセンターにより、特定の通信（主に不正な通信）を検知するシステムです
-- ネットワーク機器の余剰リソースでの実現を目指しています
-- 検知にあたっては、ネットワークの設計から組み込む必要があります（セキュリティバイデザイン）
+**Turn unused network space into distributed security sensors using routing.**
 
+Network-NINJA is an open-source network security tool designed to detect suspicious network activity by turning unused network address space into active monitoring zones.
+
+Instead of deploying decoy systems throughout the network, Network-NINJA uses routing to direct traffic destined for plausible but unused network ranges toward designated **Trap Zones**.
+
+Because legitimate users and systems normally have no reason to communicate with these unused address ranges, traffic reaching a Trap Zone can provide a useful signal for identifying activities such as network reconnaissance, scanning, misconfiguration, and potentially suspicious lateral movement.
+
+Network-NINJA is designed to make this approach manageable across distributed network environments.
+
+---
+
+## Why Network-NINJA?
+
+Traditional network monitoring focuses primarily on traffic involving known systems and services.
+
+However, unused portions of the network can also provide valuable security signals.
+
+Consider an attacker performing network reconnaissance:
+
+```text
+10.10.1.10   Production Server
+10.10.1.20   Production Server
+10.10.1.30   Production Server
+
+10.20.0.0/16  Unused Network
 ```
-[ネットワーク機器A]          [ネットワーク機器B]
- └─ ninja-agent               └─ ninja-agent
-      │ Heartbeat (30s)             │ Heartbeat (30s)
-      │ Filter poll (60s)           │ Filter poll (60s)
-      │ Captured traffic → syslog UDP │ Captured traffic → syslog UDP
-      └──────────────┬──────────────┘
-                     ▼
-             [Manager サーバ]
-              ninja-manager
-              ├─ Web UI   :8080
-              ├─ REST API :8080
-              └─ Syslog   :514/udp
+
+If there is no legitimate reason to access `10.20.0.0/16`, traffic directed toward that network may be worth investigating.
+
+Network-NINJA uses routing to redirect such traffic to a controlled Trap Zone where it can be observed and analyzed.
+
+```text
+                     Normal Traffic
+                          |
+                          v
+                   Production Network
+                          |
+           +--------------+--------------+
+           |                             |
+           v                             v
+    Production Systems            Unused Networks
+                                         |
+                                      Routing
+                                         |
+                                         v
+                                    Trap Zone
+                                         |
+                                         v
+                                Security Monitoring
+```
+
+This allows unused network space itself to become part of the security monitoring architecture.
+
+---
+
+## Concept
+
+The core idea behind Network-NINJA is simple:
+
+> **If nobody should be communicating with an unused network, traffic going there is interesting.**
+
+Network-NINJA combines:
+
+- Network routing
+- Unused network address space
+- Trap Zones
+- Distributed monitoring
+- Centralized management
+
+to help detect unexpected network behavior.
+
+A Trap Zone does not need to represent a real production network.
+
+Instead, organizations can use plausible unused network ranges as detection surfaces.
+
+When reconnaissance or scanning reaches those ranges, routing can direct the traffic toward monitoring infrastructure.
+
+---
+
+## Architecture
+
+Network-NINJA uses a distributed architecture consisting primarily of **Manager** and **Agent** components.
+
+```text
+                    +-----------------------+
+                    | Network-NINJA Manager |
+                    +-----------+-----------+
+                                |
+                   Configuration / Management
+                                |
+             +------------------+------------------+
+             |                                     |
+             v                                     v
+      +-------------+                       +-------------+
+      |   Agent A   |                       |   Agent B   |
+      +------+------+                       +------+------+
+             |                                     |
+          Routing                                Routing
+             |                                     |
+             v                                     v
+      +-------------+                       +-------------+
+      |  Trap Zone  |                       |  Trap Zone  |
+      +-------------+                       +-------------+
+```
+
+This architecture is intended to enable Trap Zones to be deployed across multiple network locations while maintaining centralized visibility and management.
+
+---
+
+## Core Components
+
+### Manager
+
+The Manager provides centralized management for Network-NINJA deployments.
+
+Its role is to coordinate Network-NINJA Agents and provide a central point for managing the distributed environment.
+
+### Agent
+
+Agents operate at network locations where Network-NINJA functionality is required.
+
+Agents work with the surrounding network environment to direct selected traffic toward the appropriate Trap Zone.
+
+### Trap Zone
+
+A Trap Zone is a controlled destination for traffic directed toward monitored unused network ranges.
+
+Traffic arriving at a Trap Zone can be inspected by security monitoring or detection systems.
+
+---
+
+## How It Works
+
+A typical Network-NINJA deployment follows this model:
+
+```text
+1. Define an unused but plausible network range
+                    |
+                    v
+2. Configure routing toward the Network-NINJA environment
+                    |
+                    v
+3. A host scans or accesses the unused network
+                    |
+                    v
+4. The traffic follows the configured route
+                    |
+                    v
+5. Traffic reaches a Trap Zone
+                    |
+                    v
+6. Security monitoring observes the activity
+```
+
+For example:
+
+```text
+Attacker / Compromised Host
+          |
+          | Network Scan
+          v
++---------------------+
+| Enterprise Network  |
++----------+----------+
+           |
+           | Route to unused network
+           v
++---------------------+
+| Network-NINJA Agent |
++----------+----------+
+           |
+           v
++---------------------+
+|      Trap Zone      |
++----------+----------+
+           |
+           v
++---------------------+
+| Security Monitoring |
++---------------------+
+```
+
+This approach allows detection infrastructure to cover address space where legitimate traffic should normally be absent.
+
+---
+
+## Potential Use Cases
+
+### Network Reconnaissance Detection
+
+Detect attempts to discover hosts or services across network ranges where legitimate systems should not exist.
+
+### Internal Network Scanning
+
+Identify hosts communicating with unused or unexpected network segments.
+
+### Lateral Movement Visibility
+
+Provide an additional signal when a compromised host explores network ranges outside its expected communication patterns.
+
+### Distributed Trap Networks
+
+Create multiple Trap Zones across large or segmented environments while managing the deployment centrally.
+
+### Security Research
+
+Experiment with routing-based network deception and detection techniques.
+
+---
+
+## Why Routing?
+
+Many deception approaches depend on deploying individual decoy hosts or services.
+
+Network-NINJA explores a different approach:
+
+> **Use the network itself as part of the detection mechanism.**
+
+Routing makes it possible to redirect traffic for selected address ranges toward security monitoring infrastructure without requiring a real system at every destination address.
+
+Conceptually:
+
+```text
+Traditional Approach
+
+Attacker
+   |
+   +----> Honeypot A
+   +----> Honeypot B
+   +----> Honeypot C
+
+
+Network-NINJA Approach
+
+Attacker
+   |
+   +----> Unused Network Range
+                     |
+                  Routing
+                     |
+                     v
+                 Trap Zone
+```
+
+This enables security teams and researchers to explore network deception at the routing layer.
+
+---
+
+## Features
+
+Network-NINJA is being developed around capabilities including:
+
+- Distributed Agent and Manager architecture
+- Routing-based Trap Zones
+- Centralized configuration management
+- Agent heartbeat monitoring
+- Event and log aggregation
+- REST API integration
+- Configuration distribution
+- Support for distributed network environments
+
+For implementation status and current limitations, please refer to the project documentation and releases.
+
+---
+
+## Example Scenario
+
+Imagine an enterprise environment using:
+
+```text
+10.10.0.0/16   Production
+10.20.0.0/16   Production
+10.30.0.0/16   Production
+```
+
+The organization also defines a plausible but unused range:
+
+```text
+10.99.0.0/16   Trap Network
+```
+
+There should normally be no reason for an endpoint to communicate with `10.99.0.0/16`.
+
+If a compromised endpoint begins broad network reconnaissance:
+
+```text
+10.10.x.x
+10.20.x.x
+10.30.x.x
+10.40.x.x
+...
+10.99.x.x
+```
+
+traffic toward the trap network can be redirected to the Network-NINJA Trap Zone.
+
+This creates an additional detection opportunity without requiring actual production hosts throughout that address range.
+
+---
+
+## Installation
+
+Installation instructions will depend on the Network-NINJA component being deployed.
+
+Please refer to the project documentation for the current installation procedure.
+
+> Detailed installation and quick-start documentation should be added here before production use.
+
+---
+
+## Quick Start
+
+A complete Quick Start guide will be provided with the supported deployment configuration.
+
+The intended deployment workflow is:
+
+```text
+Install Manager
+      |
+      v
+Install Agent
+      |
+      v
+Configure monitored network ranges
+      |
+      v
+Configure routing
+      |
+      v
+Configure Trap Zone
+      |
+      v
+Generate test traffic
+      |
+      v
+Verify detection
 ```
 
 ---
 
-## ディレクトリ構成
+## Security Considerations
 
-```
-Network-NINJA/
-├── manager/
-│   ├── NN-Manager.py       # Flask アプリ本体
-│   ├── Dockerfile
-│   └── Docker-compose
-└── agent/
-    ├── nn-agent.sh         # Agent エントリポイント
-    └── Dockerfile
-```
+Network-NINJA changes how selected network traffic is routed and monitored.
+
+Test deployments should therefore be performed in a controlled environment before introducing the system into production networks.
+
+Routing configurations, monitored address ranges, and Trap Zone placement should be carefully reviewed to avoid unintended traffic redirection.
 
 ---
 
-## Manager の起動
+## Project Status
 
-### Docker で起動（推奨）
+Network-NINJA is under active development.
 
-```bash
-cd manager/
-docker compose up -d
-```
-
-Web UI: http://<manager-ip>:8080
-
-### bare metal / VM で起動
-
-```bash
-pip install flask
-DB_PATH=./ninja.db WEB_PORT=8080 SYSLOG_PORT=5514 python3 NN-Manager.py
-```
-
-> ポート 514 は root 権限が必要です。非 root の場合は `SYSLOG_PORT=5514` を使用してください。
+Interfaces, configuration formats, deployment procedures, and features may change as the project evolves.
 
 ---
 
-## Agent の起動
+## Contributing
 
-各ネットワーク機器で以下を実行します。
+Contributions, feedback, testing, and discussions are welcome.
 
-### 1. イメージをビルド
-
-```bash
-cd agent/
-docker build -t ninja-agent .
-```
-
-### 2. コンテナを起動
-
-```bash
-docker run -d \
-  --name ninja-agent \
-  --restart unless-stopped \
-  --cap-add=NET_RAW \
-  --cap-add=NET_ADMIN \
-  --network=host \
-  -e MANAGER_URL="http://192.168.1.100:8080" \
-  -e SYSLOG_SERVER="192.168.1.100" \
-  -e SYSLOG_PORT="514" \
-  -e NODE_ID="agent-sw01" \
-  -e NODE_LABEL="Switch-01 (1F)" \
-  ninja-agent
-```
-
-> `--network=host` を使うとホストの全インターフェースを監視できます。  
-> macvlan で特定 NIC に参加させたい場合は `--network=<macvlan_network_name>` に変更してください。
-
-### 環境変数一覧
-
-| 変数 | 必須 | 説明 | 例 |
-|------|------|------|----|
-| MANAGER_URL   | ✓ | Manager の URL | `http://192.168.1.100:8080` |
-| SYSLOG_SERVER | ✓ | syslog 送信先 IP（通常は Manager と同じ） | `192.168.1.100` |
-| SYSLOG_PORT   |   | syslog 送信先ポート（省略時 514） | `514` |
-| NODE_ID       |   | ノード識別子（省略時: hostname） | `agent-sw01` |
-| NODE_LABEL    |   | Manager UI の表示名 | `Switch-01 (1F)` |
-
-### ログ確認・停止
-
-```bash
-# ログ確認
-docker logs -f ninja-agent
-
-# 停止
-docker stop ninja-agent
-
-# 削除
-docker rm ninja-agent
-```
+If you discover a bug or have an idea for improving Network-NINJA, please open an issue in this repository.
 
 ---
 
-## キャプチャフィルタの設定
+## License
 
-Manager の Web UI **[ FILTER CONFIG ]** タブから、Agent がキャプチャするトラフィックを選択できます。
-
-| プロトコル | 説明 |
-|------------|------|
-| ICMP | Ping（Echo Request / Echo Reply） |
-| 80/tcp | HTTP |
-| 443/tcp | HTTPS |
-| 445/tcp | SMB |
-
-選択後に **「Apply to All Agents」** を押すと設定が保存されます。  
-各 Agent は 60 秒以内に設定を取得し、tcpdump フィルタを自動更新・再起動します。
-
-何も選択しない場合は ICMP のみキャプチャします（デフォルト動作）。
+Please refer to the `LICENSE` file in this repository for licensing information.
 
 ---
 
-## REST API リファレンス
+## Author
 
-| Method | Path | 説明 |
-|--------|------|------|
-| POST   | /api/heartbeat | Agent からの死活報告 |
-| GET    | /api/nodes | ノード一覧取得 |
-| DELETE | /api/nodes/:id | ノード削除 |
-| GET    | /api/syslogs | syslog ログ取得（?q=検索&source=IP&limit=件数） |
-| GET    | /api/syslogs/count | ログ総件数 |
-| GET    | /api/filter | 現在のキャプチャフィルタ設定を取得 |
-| POST   | /api/filter | キャプチャフィルタ設定を更新 |
-| GET    | /api/config/:node_id | Agent がフィルタ設定をポーリング |
+**Ken Sugio**
 
-### フィルタ設定の例
+Cybersecurity and network security researcher / engineer.
 
-```bash
-# 現在の設定を確認
-curl http://manager:8080/api/filter
+Areas of interest include:
 
-# ICMP + HTTPS を有効にする
-curl -X POST http://manager:8080/api/filter \
-  -H "Content-Type: application/json" \
-  -d '{"icmp": true, "tcp80": false, "tcp443": true, "tcp445": false}'
-```
+- Network security
+- Network monitoring
+- Network deception
+- Zero Trust
+- Threat detection
+- Network architecture
 
 ---
 
-## フィルタ変更の仕組み
+## Disclaimer
 
-1. Manager の Web UI で対象プロトコルを選択し「Apply to All Agents」
-2. Manager DB（`settings` テーブル）にフィルタ設定が保存される
-3. 各 Agent は 60 秒ごとに `GET /api/config/<node_id>` をポーリング
-4. 変更を検知したら tcpdump を新しい BPF フィルタで再起動
+Network-NINJA is intended for authorized security testing, research, and defensive security purposes.
 
----
-
-## ノードのステータス判定
-
-| 状態 | 条件 |
-|------|------|
-| ONLINE  | 最終ハートビートから 2 分以内 |
-| OFFLINE | 最終ハートビートから 2 分超過 |
-
----
-
-## データ永続化
-
-SQLite（`/data/ninja.db`）に以下を保存します。
-
-- `nodes` テーブル: ノード情報・最終確認時刻
-- `syslogs` テーブル: 受信ログ全件
-- `settings` テーブル: キャプチャフィルタ設定
+Users are responsible for ensuring that deployment and testing comply with their organization's policies and applicable laws.
