@@ -353,4 +353,45 @@ Network-NINJAは、特定のネットワーク通信のルーティングや監�
 
 ## プロジェクトステータス
 
-Network-
+Network-NINJAは現在も開発中です。
+
+インターフェース、設定フォーマット、導入方法、機能などは、今後変更される可能性があります。
+
+---
+
+## コントリビューション
+
+Network-NINJAへのコントリビューション、フィードバック、テストへの協力を歓迎します。
+
+バグを発見した場合や改善案がある場合は、このリポジトリのIssueからお知らせください。
+
+---
+
+## ライセンス
+
+ライセンスについては、このリポジトリの `LICENSE` ファイルを参照してください。
+
+---
+
+## Author
+
+**Ken Sugi**
+
+Cybersecurity and network security researcher / engineer.
+
+主な関心領域：
+
+- Network Security
+- Network Monitoring
+- Network Deception
+- Zero Trust
+- Threat Detection
+- Network Architecture
+
+---
+
+## Disclaimer
+
+Network-NINJAは、許可されたセキュリティテスト、セキュリティ研究、および防御目的での利用を想定しています。
+
+利用者は、Network-NINJAの導入およびテストが、所属する組織のポリシーや適用される法令に準拠していることを確認する責任があります。
