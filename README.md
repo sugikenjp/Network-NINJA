@@ -1,6 +1,6 @@
 # Network-NINJA
-
-**Turn unused network space into a **curity detection surface through intentional network design.**
+ 
+**Turn unused network space into a security detection surface through intentional network design.**
 
 Network-NINJA is an open-source, distributed network sensor designed to detect unexpected traffic inside enterprise networks.
 
