@@ -382,7 +382,71 @@ Network-NINJA は検知と可視化に焦点を当てています。
 
 Network-NINJA は選択された通信を観測し、防御側が調査するための情報を提供します。
 
-遮断、隔離、復旧、インシデント対応は、組織の既存のセキュリティ対策やネットワーク制御で行ってください。
+遮断、隔離、復旧、インシデント対応は、組織の既存のセキュリティ対策やネットワーク制御で行ってください。検知結果を遮断に活用する方法は [遮断制御との連携](#遮断制御との連携) を参照してください。
+
+---
+
+## 遮断制御との連携
+
+Network-NINJA 自体は通信を遮断しません。遮断まで実施したい場合は、Network-NINJA が検知した送信元 IP アドレスを、既存のルーター、スイッチ、ファイアウォールで活用してください。
+
+Manager は、検知した送信元 IP アドレスの一覧を REST API およびテキスト形式で提供します。
+
+<!-- TODO: <ip-list-endpoint> を実際のエンドポイントのパスに置き換え、出力形式を確認する -->
+
+```
+GET http://<manager-address>:8080/<ip-list-endpoint>
+```
+
+出力例(1 行に 1 つの IP アドレス):
+
+```
+10.1.23.45
+10.5.6.78
+```
+
+### ルーター・スイッチの ACL
+
+Manager から一覧を取得し、既存の自動化や構成管理の仕組みを使って、ルーターや L3 スイッチの ACL に反映してください。
+
+### Palo Alto Networks: External Dynamic List
+
+Palo Alto Networks のファイアウォールは、Web サーバー上の IP リストを **External Dynamic List(EDL)** として定期的に取得できます。
+
+1. タイプが **IP List** の External Dynamic List を作成します。
+2. ソース URL に、Manager のテキスト形式の IP リストを指定します。
+3. 更新間隔を設定します。
+4. 作成した EDL を、拒否アクションのセキュリティポリシールールの送信元アドレスとして使用します。
+
+参考: [Policy Object: External Dynamic Lists](https://docs.paloaltonetworks.com/network-security/security-policy/administration/objects/external-dynamic-lists)
+
+### Fortinet FortiGate: External Block List(Threat Feed)
+
+FortiGate では、外部 IP アドレスリスト(Threat Feed)をファイアウォールポリシーの送信元または宛先アドレスとして使用できます。
+
+```
+config system external-resource
+    edit "network-ninja-detected"
+        set status enable
+        set type address
+        set resource "http://<manager-address>:8080/<ip-list-endpoint>"
+        set refresh-rate 5
+    next
+end
+```
+
+`network-ninja-detected` を、拒否アクションのファイアウォールポリシーの送信元アドレスとして使用してください。
+
+なお、Fortinet のドキュメントによると、外部 IP リストは IPv4 / IPv6 のファイアウォールポリシーでは使用できますが、ACL、DoS、local-in ポリシーには対応していません。
+
+参考: [External Block List (Threat Feed) – Policy](https://docs.fortinet.com/document/fortigate/6.2.0/new-features/625349/external-block-list-threat-feed-policy)
+
+### 運用上の注意
+
+- 検知イベントは、監視ツール、脆弱性スキャナー、設定ミスなど、正規の送信元によって発生することもあります。自動遮断を有効にする前に、一覧を確認し、除外設定を整備してください。
+- 内部ホストを遮断すると、業務に影響が出る可能性があります。まずはログのみを記録するポリシーから始め、その後に拒否アクションへ移行することを検討してください。
+- ファイアウォールや自動化システムから Manager に到達できることを確認してください。また、IP リストのエンドポイントは検知結果を含むため、アクセスを制限してください。
+- 遮断の判断は、引き続きネットワーク管理者およびセキュリティ管理者の責任で行ってください。
 
 ---
 
@@ -621,6 +685,9 @@ GET /api/config/<node_id>
 | `GET`    | `/api/syslogs/count`   | Syslog レコードの総数を取得            |
 | `POST`   | `/api/config/deploy`   | 複数の Agent に設定を配信              |
 | `GET`    | `/api/config/:node_id` | Agent 用の設定を取得                   |
+| `GET`    | `<ip-list-endpoint>`   | 検知した送信元 IP アドレスを取得(JSON またはテキスト) |
+
+<!-- TODO: <ip-list-endpoint> を実際のエンドポイントのパスに置き換える -->
 
 Syslog レコード取得時のクエリパラメーターの例:
 
