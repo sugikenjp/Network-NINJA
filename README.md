@@ -382,7 +382,71 @@ It is not designed to operate as:
 
 Network-NINJA observes selected traffic and provides information that defenders can investigate.
 
-Blocking, isolation, remediation, and incident response should be handled by the organization's existing security and network controls.
+Blocking, isolation, remediation, and incident response should be handled by the organization's existing security and network controls. See [Integrating with Blocking Controls](#integrating-with-blocking-controls) for how to use detection results for blocking.
+
+---
+
+## Integrating with Blocking Controls
+
+Network-NINJA itself does not block traffic. When blocking is required, use the source IP addresses detected by Network-NINJA with your existing routers, switches, and firewalls.
+
+The Manager provides the list of detected source IP addresses through the REST API and as a plain-text list.
+
+<!-- TODO: Replace <ip-list-endpoint> with the actual endpoint path and confirm the output format. -->
+
+```
+GET http://<manager-address>:8080/<ip-list-endpoint>
+```
+
+Example output (one IP address per line):
+
+```
+10.1.23.45
+10.5.6.78
+```
+
+### Router and switch ACLs
+
+Retrieve the list from the Manager and apply it to ACLs on your routers or Layer 3 switches, using your existing automation or configuration-management process.
+
+### Palo Alto Networks: External Dynamic Lists
+
+Palo Alto Networks firewalls can periodically retrieve an IP list from a web server as an **External Dynamic List (EDL)**.
+
+1. Create an External Dynamic List of type **IP List**.
+2. Set the source URL to the Manager's plain-text IP list.
+3. Set the update interval.
+4. Use the EDL as the source address in a Security policy rule with a deny action.
+
+Reference: [Policy Object: External Dynamic Lists](https://docs.paloaltonetworks.com/network-security/security-policy/administration/objects/external-dynamic-lists)
+
+### Fortinet FortiGate: External Block List (Threat Feed)
+
+FortiGate can use an external IP address list (Threat Feed) as a source or destination address in firewall policies.
+
+```
+config system external-resource
+    edit "network-ninja-detected"
+        set status enable
+        set type address
+        set resource "http://<manager-address>:8080/<ip-list-endpoint>"
+        set refresh-rate 5
+    next
+end
+```
+
+Use `network-ninja-detected` as the source address in a firewall policy with a deny action.
+
+Note that, according to Fortinet's documentation, the external IP list is supported in IPv4 and IPv6 firewall policies, but not in ACL, DoS, or local-in policies.
+
+Reference: [External Block List (Threat Feed) – Policy](https://docs.fortinet.com/document/fortigate/6.2.0/new-features/625349/external-block-list-threat-feed-policy)
+
+### Operational considerations
+
+- Detection events can be caused by legitimate sources such as monitoring tools, vulnerability scanners, or misconfiguration. Review the list and maintain exclusions before enabling automatic blocking.
+- Blocking internal hosts can disrupt business operations. Consider starting with log-only policies before enforcing deny actions.
+- Ensure that firewalls and automation systems can reach the Manager, and restrict access to the IP list endpoint, since it reveals detection results.
+- The decision to block remains the responsibility of the network and security administrators.
 
 ---
 
@@ -621,6 +685,9 @@ When a changed configuration is detected, the Agent restarts its monitoring proc
 | `GET`    | `/api/syslogs/count`   | Retrieve the total Syslog record count  |
 | `POST`   | `/api/config/deploy`   | Deploy configuration to multiple Agents |
 | `GET`    | `/api/config/:node_id` | Retrieve configuration for an Agent     |
+| `GET`    | `<ip-list-endpoint>`   | Retrieve detected source IP addresses (JSON or plain text) |
+
+<!-- TODO: Replace <ip-list-endpoint> with the actual endpoint path. -->
 
 Example query parameters for retrieving Syslog records:
 
