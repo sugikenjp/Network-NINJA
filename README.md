@@ -28,10 +28,22 @@ This approach makes security monitoring part of the network design process.
 
 ## Demo
 
-<!-- TODO: Add a screenshot of the Manager Web UI and a short GIF of the detection flow. -->
-<!-- Example: ![Manager Web UI](docs/images/manager-ui.png) -->
+### Manager Web UI
 
-*Screenshots and a demo recording will be added here.*
+<table>
+  <tr>
+    <td align="center"><b>Node Management</b></td>
+    <td align="center"><b>Detection Log (Syslog)</b></td>
+    <td align="center"><b>Source IP Tracking</b></td>
+    <td align="center"><b>Filter Configuration</b></td>
+  </tr>
+  <tr>
+    <td><a href="docs/images/screenshot/1.png"><img src="docs/images/screenshot/1.png" width="180"></a></td>
+    <td><a href="docs/images/screenshot/2.png"><img src="docs/images/screenshot/2.png" width="180"></a></td>
+    <td><a href="docs/images/screenshot/3.png"><img src="docs/images/screenshot/3.png" width="180"></a></td>
+    <td><a href="docs/images/screenshot/4.png"><img src="docs/images/screenshot/4.png" width="180"></a></td>
+  </tr>
+</table>
 
 ---
 
