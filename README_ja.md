@@ -26,12 +26,24 @@ Network-NINJA 自体は、ルーティングの設定や制御を行いません
 
 ---
 
-## デモ
+## 画面イメージ
 
-<!-- TODO: Manager Web UI のスクリーンショットと、検知フローの短い GIF を追加する -->
-<!-- 例: ![Manager Web UI](docs/images/manager-ui.png) -->
+### Manager Web UI
 
-*スクリーンショットとデモ動画をここに掲載予定です。*
+<table>
+  <tr>
+    <td align="center"><b>ノード管理</b></td>
+    <td align="center"><b>検知ログ（Syslog）</b></td>
+    <td align="center"><b>送信元 IP 追跡</b></td>
+    <td align="center"><b>フィルター設定</b></td>
+  </tr>
+  <tr>
+    <td><a href="docs/images/screenshot/1.png"><img src="docs/images/screenshot/1.png" width="180"></a></td>
+    <td><a href="docs/images/screenshot/2.png"><img src="docs/images/screenshot/2.png" width="180"></a></td>
+    <td><a href="docs/images/screenshot/3.png"><img src="docs/images/screenshot/3.png" width="180"></a></td>
+    <td><a href="docs/images/screenshot/4.png"><img src="docs/images/screenshot/4.png" width="180"></a></td>
+  </tr>
+</table>
 
 ---
 
